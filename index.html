@@ -791,6 +791,7 @@ footer {
           <th>Country / ETF</th>
           <th>Tier</th>
           <th>P/E<span class="sub">multiple</span></th>
+          <th>Term P/E<span class="sub">exit 5y</span></th>
           <th>FCF Yld<span class="sub">c/PE %</span></th>
           <th style="background:#222">EG<span class="sub">active mode %</span></th>
           <th>FX Δ<span class="sub">annual %</span></th>
@@ -819,6 +820,7 @@ footer {
           <th>Country / ETF</th>
           <th>Tier</th>
           <th>P/E</th>
+          <th>Term P/E<span class="sub">exit 5y</span></th>
           <th>c<span class="sub">FCF/NI</span></th>
           <th>GDP<span class="sub">%</span></th>
           <th>Infl<span class="sub">%</span></th>
@@ -998,6 +1000,7 @@ const COM_PROFILE = {
 
 const CAD_THRESHOLD = -3.0;
 const CAD_K = 1.0;
+const H_HORIZON = 5;
 
 // ============================================================
 // STATE
@@ -1039,13 +1042,17 @@ function computeRow(r) {
 
   const overshoot = cadOvershoot(r.cad_curr);
   const dFX = r.fx_chg + overshoot;
-  const localPre = fcfYield + eg;
+  const peTerminal = (r.pe_terminal === undefined || r.pe_terminal === null) ? r.pe : r.pe_terminal;
+  const multipleRev = (r.pe > 0 && peTerminal > 0)
+    ? (Math.pow(peTerminal / r.pe, 1 / H_HORIZON) - 1) * 100
+    : 0;
+  const localPre = fcfYield + eg + multipleRev;
   const haircut = 1 - 0.4 * (r.fin / 100);
   const localAdj = localPre * haircut;
   const rUSD = ((1 + localAdj/100) * (1 + dFX/100) - 1) * 100;
   const lamJoint = Math.sqrt(lam_g * lam_c);
 
-  return { fcfYield, eg, eg_gdp, eg_lt, eg_sgr, eg_median, dFX, overshoot, localPre, localAdj, rUSD, haircut, lam_g, lam_c, lamJoint };
+  return { fcfYield, eg, eg_gdp, eg_lt, eg_sgr, eg_median, dFX, overshoot, multipleRev, peTerminal, localPre, localAdj, rUSD, haircut, lam_g, lam_c, lamJoint };
 }
 
 function forecastRiskArrow(r) {
@@ -1250,6 +1257,7 @@ function renderFrontMatrix() {
         <td class="country-cell">${r.country}<span class="ticker">${r.ticker}</span></td>
         <td>${tierBadge(r.tier)}</td>
         <td class="editable" data-field="pe">${fmt(r.pe, 1)}</td>
+        <td class="editable" data-field="pe_terminal">${fmt(r.pe_terminal, 1)}</td>
         <td>${fmt(c.fcfYield, 2)}</td>
         <td style="font-weight:600">${fmt(c.eg, 2)}</td>
         <td class="editable" data-field="fx_chg">${fmt(c.dFX, 2)}</td>
@@ -1276,6 +1284,7 @@ function renderFullInputs() {
         <td class="country-cell">${r.country}<span class="ticker">${r.ticker}</span></td>
         <td>${tierBadge(r.tier)}</td>
         <td class="editable" data-field="pe">${fmt(r.pe, 1)}</td>
+        <td class="editable" data-field="pe_terminal">${fmt(r.pe_terminal, 1)}</td>
         <td class="editable" data-field="c">${fmt(r.c, 3)}</td>
         <td class="editable" data-field="gdp">${fmt(r.gdp, 2)}</td>
         <td class="editable" data-field="inflation">${fmt(r.inflation, 2)}</td>
@@ -1366,7 +1375,7 @@ function renderDetail() {
   const fxFactor = 1 + c.dFX/100;
   const rUSD = c.rUSD;
 
-  const maxBar = Math.max(Math.abs(c.fcfYield), Math.abs(c.eg), Math.abs(c.dFX), Math.abs(rUSD)) || 1;
+  const maxBar = Math.max(Math.abs(c.fcfYield), Math.abs(c.eg), Math.abs(c.multipleRev), Math.abs(c.dFX), Math.abs(rUSD)) || 1;
   const barW = v => Math.min(100, Math.abs(v) / maxBar * 100);
 
   function row(label, val, cls, suffix='%') {
@@ -1382,6 +1391,7 @@ function renderDetail() {
   const wfHTML = `
     ${row('FCF Yield', c.fcfYield, 'pos')}
     ${row('+ Earnings Growth', c.eg, c.eg >= 0 ? 'pos' : 'neg')}
+    ${row(`+ Multiple Rev. (PE ${r.pe.toFixed(1)} → ${c.peTerminal.toFixed(1)}, ${H_HORIZON}y)`, c.multipleRev, c.multipleRev >= 0 ? 'pos' : 'neg')}
     <div class="wf-row" style="border-top:1px dashed var(--rule);padding-top:6px">
       <span class="wf-label">= Local Return</span>
       <div class="wf-bar"><div class="bar-fill mid" style="width:${barW(localPre)}%"></div></div>
@@ -1432,7 +1442,7 @@ function renderDetail() {
 
   // Editable inputs
   const fields = [
-    ['pe','P/E'], ['c','c (FCF/NI)'], ['gdp','Real GDP %'], ['inflation','Inflation %'],
+    ['pe','P/E'], ['pe_terminal','Terminal P/E (5y exit)'], ['c','c (FCF/NI)'], ['gdp','Real GDP %'], ['inflation','Inflation %'],
     ['beta_gdp','β GDP'], ['lt_eps','LT EPS %'], ['roe','ROE %'], ['payout','Payout %'],
     ['fx_chg','FX Δ %'], ['cad_curr','CAD %'], ['fin','Fin Weight %']
   ];
@@ -1549,6 +1559,7 @@ async function bootstrap() {
     data.forEach(r => {
       if (r.tier === 'EM HR') r.tier = 'EMHR';
       if (!r.com_profile) r.com_profile = 'NEUTRAL';
+      if (r.pe_terminal === undefined || r.pe_terminal === null) r.pe_terminal = r.pe;
     });
     state.rows = data;
     document.getElementById('front-meta').textContent = `${data.length} ETFs · click any row for detail`;
